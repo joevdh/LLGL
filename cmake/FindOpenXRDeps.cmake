@@ -72,4 +72,32 @@ if(OPENXR_FOUND)
             set_target_properties(${_oxr_target} PROPERTIES FOLDER "External/OpenXR")
         endif()
     endforeach()
+
+    # Workaround: the OpenXR-SDK loader (src/loader/CMakeLists.txt) adds an unconditional
+    # POST_BUILD `xcopy /Y /I` step on Visual Studio + DYNAMIC_LOADER that hardcodes the
+    # source path to `${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>/openxr_loader[d].dll`. If the
+    # consuming project sets a global RUNTIME_OUTPUT_DIRECTORY (typical for solutions that
+    # consolidate all DLLs into a single bin/ folder), the loader DLL lands elsewhere and
+    # the SDK's xcopy fails with `File not found - openxr_loaderd.dll`, breaking the build.
+    #
+    # Pin the loader's per-config output directory back to the SDK-expected location.
+    # Our own POST_BUILD copy step (sources/XR/OpenXR/CMakeLists.txt) still stages the DLL
+    # next to LLGL.dll, so consumers continue to get it where they need it at runtime.
+    if(TARGET openxr_loader AND CMAKE_GENERATOR MATCHES "^Visual Studio.*")
+        get_target_property(_oxr_loader_type openxr_loader TYPE)
+        if(_oxr_loader_type STREQUAL "SHARED_LIBRARY")
+            get_target_property(_oxr_loader_bindir openxr_loader BINARY_DIR)
+            set_target_properties(openxr_loader PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY "${_oxr_loader_bindir}"
+            )
+            foreach(_oxr_cfg ${CMAKE_CONFIGURATION_TYPES})
+                string(TOUPPER "${_oxr_cfg}" _oxr_cfg_upper)
+                set_target_properties(openxr_loader PROPERTIES
+                    RUNTIME_OUTPUT_DIRECTORY_${_oxr_cfg_upper} "${_oxr_loader_bindir}/${_oxr_cfg}"
+                    LIBRARY_OUTPUT_DIRECTORY_${_oxr_cfg_upper} "${_oxr_loader_bindir}/${_oxr_cfg}"
+                    PDB_OUTPUT_DIRECTORY_${_oxr_cfg_upper}     "${_oxr_loader_bindir}/${_oxr_cfg}"
+                )
+            endforeach()
+        endif()
+    endif()
 endif()

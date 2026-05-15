@@ -79,8 +79,6 @@ class VKRenderSystem final : public RenderSystem
         bool PickPhysicalDevice(long preferredDeviceFlags, VkPhysicalDevice customPhysicalDevice = VK_NULL_HANDLE);
         void CreateLogicalDevice(VkDevice customLogicalDevice = VK_NULL_HANDLE);
 
-        bool IsLayerRequired(const char* name, const RendererConfigurationVulkan* config) const;
-
         VKDeviceBuffer CreateStagingBuffer(const VkBufferCreateInfo& createInfo);
 
         VKDeviceBuffer CreateStagingBufferAndInitialize(

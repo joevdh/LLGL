@@ -24,12 +24,15 @@ namespace LLGL
 {
 
 
-static const char* g_requiredVulkanExtensions[] =
+// Count entries in a null-terminated `const char*` array (matches the format used by
+// GetRequiredDeviceExtensions / GetOptionalExtensions in VKExtensionRegistry).
+static std::size_t CountNullTerminatedExtensionList(const char* const* list)
 {
-    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-    VK_KHR_MAINTENANCE1_EXTENSION_NAME,
-    nullptr,
-};
+    std::size_t count = 0;
+    while (list[count] != nullptr)
+        ++count;
+    return count;
+}
 
 static bool CheckDeviceExtensionSupport(
     VkPhysicalDevice                    physicalDevice,
@@ -59,10 +62,11 @@ static bool IsPhysicalDeviceSuitable(
 {
     /* Check if physical devices supports at least these extensions */
     std::vector<VkExtensionProperties> extensions;
+    const char* const* requiredExtensions = GetRequiredDeviceExtensions();
     bool suitable = CheckDeviceExtensionSupport(
         physicalDevice,
-        g_requiredVulkanExtensions,
-        (sizeof(g_requiredVulkanExtensions) / sizeof(g_requiredVulkanExtensions[0]) - 1),
+        requiredExtensions,
+        CountNullTerminatedExtensionList(requiredExtensions),
         extensions
     );
 
@@ -104,7 +108,7 @@ bool VKPhysicalDevice::PickPhysicalDevice(VkInstance instance, const ArrayView<c
         for (const VkExtensionProperties& extension : supportedExtensions_)
             supportedExtensionNames_.insert(extension.extensionName);
 
-        if (!EnableExtensions(g_requiredVulkanExtensions, true))
+        if (!EnableExtensions(GetRequiredDeviceExtensions(), true))
         {
             /* Stop considering this physical device, because some required extensions are not supported */
             supportedExtensionNames_.clear();

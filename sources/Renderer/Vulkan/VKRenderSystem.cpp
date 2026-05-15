@@ -851,31 +851,12 @@ bool VKRenderSystem::GetNativeHandle(void* nativeHandle, std::size_t nativeHandl
  * ======= Private: =======
  */
 
-#ifndef VK_LAYER_KHRONOS_VALIDATION_NAME
-#define VK_LAYER_KHRONOS_VALIDATION_NAME "VK_LAYER_KHRONOS_validation"
-#endif
-
 void VKRenderSystem::QuerySupportedInstanceExtensions()
 {
-    /* Query instance extension properties */
-    instanceExtensionProperties_ = VKQueryInstanceExtensionProperties();
-
-    auto IsVKExtSupportIncluded = [this](VKExtSupport extSupport)
-    {
-        return
-        (
-            extSupport == VKExtSupport::Required ||
-            extSupport == VKExtSupport::Optional ||
-            (this->isDebugLayerEnabled_ && extSupport == VKExtSupport::DebugOnly)
-        );
-    };
-
-    for (const VkExtensionProperties& prop : instanceExtensionProperties_)
-    {
-        const VKExtSupport extSupport = GetVulkanInstanceExtensionSupport(prop.extensionName);
-        if (IsVKExtSupportIncluded(extSupport))
-            supportedInstanceExtensions_.push_back(prop.extensionName);
-    }
+    /* Delegate the per-extension classification to the shared helper so the OpenXR
+       binding (which has to populate VkInstanceCreateInfo itself) and this path stay
+       in lock-step. */
+    LLGL::QuerySupportedInstanceExtensions(isDebugLayerEnabled_, instanceExtensionProperties_, supportedInstanceExtensions_);
 }
 
 void VKRenderSystem::CreateInstance(const RendererConfigurationVulkan* config)
@@ -885,15 +866,10 @@ void VKRenderSystem::CreateInstance(const RendererConfigurationVulkan* config)
     vkEnumerateInstanceVersion(&instanceVersion);
     LLGL_ASSERT(instanceVersion >= VK_API_VERSION_1_0, "vkEnumerateInstanceVersion(instanceVersion = %u)", instanceVersion);
 
-    /* Query instance layer properties */
-    const std::vector<VkLayerProperties> layerProperties = VKQueryInstanceLayerProperties();
-    std::vector<const char*> layerNames;
-
-    for (const VkLayerProperties& prop : layerProperties)
-    {
-        if (IsLayerRequired(prop.layerName, config))
-            layerNames.push_back(prop.layerName);
-    }
+    /* Query instance layer properties via the shared helper (also used by the OpenXR binding). */
+    std::vector<VkLayerProperties> layerProperties;
+    std::vector<const char*>       layerNames;
+    QuerySupportedInstanceLayers(isDebugLayerEnabled_, config, layerProperties, layerNames);
 
     /* Setup Vulkan instance descriptor */
     VkInstanceCreateInfo instanceInfo = {};
@@ -1069,26 +1045,6 @@ void VKRenderSystem::CreateLogicalDevice(VkDevice customLogicalDevice)
 
     /* Load Vulkan device extensions */
     VKLoadDeviceExtensions(device_, physicalDevice_.GetExtensionNames());
-}
-
-bool VKRenderSystem::IsLayerRequired(const char* name, const RendererConfigurationVulkan* config) const
-{
-    if (config != nullptr)
-    {
-        for (const char* layer : config->enabledLayers)
-        {
-            if (::strcmp(layer, name) == 0)
-                return true;
-        }
-    }
-
-    if (isDebugLayerEnabled_)
-    {
-        if (::strcmp(name, VK_LAYER_KHRONOS_VALIDATION_NAME) == 0)
-            return true;
-    }
-
-    return false;
 }
 
 VKDeviceBuffer VKRenderSystem::CreateStagingBuffer(const VkBufferCreateInfo& createInfo)

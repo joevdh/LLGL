@@ -11,9 +11,11 @@
 #include "VKOpenXRGraphicsBinding.h"
 
 #include <LLGL/Backend/Vulkan/NativeHandle.h>
+#include <LLGL/RenderSystemFlags.h>
 #include <LLGL/Report.h>
 
 #include "../../../XR/OpenXR/OpenXRError.h"
+#include "../Ext/VKExtensionRegistry.h"
 #include "../Texture/VKTexture.h"
 
 #include <vector>
@@ -94,6 +96,11 @@ static bool GetVulkanNativeHandle(RenderSystem& renderSystem, Vulkan::RenderSyst
     return renderSystem.GetNativeHandle(&outHandle, sizeof(outHandle));
 }
 
+// Instance/device extension and layer selection lives in VKExtensionRegistry, shared with
+// the non-XR path's VKRenderSystem so the two paths can't drift. We just call those helpers
+// at the right point and feed the resulting lists into the create-infos OpenXR hands off
+// to xrCreateVulkan{Instance,Device}KHR.
+
 
 VKOpenXRGraphicsBinding::VKOpenXRGraphicsBinding() = default;
 
@@ -166,9 +173,44 @@ RenderSystemPtr VKOpenXRGraphicsBinding::CreateRenderSystem(
     appInfo.engineVersion       = 1;
     appInfo.apiVersion          = VK_API_VERSION_1_1;
 
-    VkInstanceCreateInfo instanceCreateInfo{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
-    instanceCreateInfo.pApplicationInfo = &appInfo;
+    // The OpenXR runtime only enables the XR-required Vulkan extensions; we have to enable
+    // everything LLGL itself needs (surface, swapchain, validation, etc.). Use the same
+    // shared selection helpers VKRenderSystem uses on the non-XR path - this keeps the two
+    // paths from drifting if extension/layer requirements ever change.
+    // (Storage vectors must outlive the create-info: the c-string pointers in the names
+    // vectors reference VkExtensionProperties::extensionName / VkLayerProperties::layerName
+    // inside them.)
+    const bool isDebugLayerEnabled = ((renderSystemDesc.flags & RenderSystemFlags::DebugDevice) != 0);
+    const auto* rendererConfigVK   = static_cast<const RendererConfigurationVulkan*>(
+        renderSystemDesc.rendererConfigSize == sizeof(RendererConfigurationVulkan) ? renderSystemDesc.rendererConfig : nullptr
+    );
 
+    std::vector<VkExtensionProperties> instanceExtensionStorage;
+    std::vector<VkLayerProperties>     instanceLayerStorage;
+    std::vector<const char*>           enabledInstanceExtensions;
+    std::vector<const char*>           enabledInstanceLayers;
+    QuerySupportedInstanceExtensions(isDebugLayerEnabled, instanceExtensionStorage, enabledInstanceExtensions);
+    QuerySupportedInstanceLayers(isDebugLayerEnabled, rendererConfigVK, instanceLayerStorage, enabledInstanceLayers);
+
+    VkInstanceCreateInfo instanceCreateInfo{ VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
+    instanceCreateInfo.pApplicationInfo         = &appInfo;
+    instanceCreateInfo.enabledLayerCount        = static_cast<std::uint32_t>(enabledInstanceLayers.size());
+    instanceCreateInfo.ppEnabledLayerNames      = (enabledInstanceLayers.empty()     ? nullptr : enabledInstanceLayers.data());
+    instanceCreateInfo.enabledExtensionCount    = static_cast<std::uint32_t>(enabledInstanceExtensions.size());
+    instanceCreateInfo.ppEnabledExtensionNames  = (enabledInstanceExtensions.empty() ? nullptr : enabledInstanceExtensions.data());
+
+    // The OpenXR runtime's required Vulkan instance extensions (e.g. swapchain interop bits)
+    // are NOT in `enabledInstanceExtensions` - we don't query them here. xrCreateVulkanInstanceKHR
+    // is contractually responsible for merging them with whatever we pass in `vulkanCreateInfo`.
+    // From the XR_KHR_vulkan_enable2 spec:
+    //
+    //   "The xrCreateVulkanInstanceKHR function creates a Vulkan instance ... The runtime is
+    //    responsible for combining the application's create info parameters with all extensions,
+    //    layers, and the API version required by the runtime to function properly."
+    //
+    // This is the whole reason we picked _enable2 over the original XR_KHR_vulkan_enable, where
+    // the application had to call xrGetVulkanInstanceExtensionsKHR, parse a whitespace-delimited
+    // string, and merge it with its own list before calling vkCreateInstance directly.
     XrVulkanInstanceCreateInfoKHR xrInstanceCreate{ XR_TYPE_VULKAN_INSTANCE_CREATE_INFO_KHR };
     xrInstanceCreate.systemId               = systemId;
     xrInstanceCreate.pfnGetInstanceProcAddr = &vkGetInstanceProcAddr;
@@ -236,11 +278,26 @@ RenderSystemPtr VKOpenXRGraphicsBinding::CreateRenderSystem(
     VkPhysicalDeviceFeatures2 features2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
     features2.pNext = &multiviewFeatures;
 
-    VkDeviceCreateInfo deviceCreateInfo{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
-    deviceCreateInfo.pNext                = &features2; // pEnabledFeatures must be null when using features2.
-    deviceCreateInfo.queueCreateInfoCount = 1;
-    deviceCreateInfo.pQueueCreateInfos    = &queueCreateInfo;
+    // Same shared-helper pattern as the instance side: pick whatever LLGL needs that this
+    // device supports. Without this, the OpenXR-created device has zero extensions and
+    // downstream LLGL code that creates a regular VkSwapchain hits VK_ERROR_EXTENSION_NOT_PRESENT
+    // (or, with validation enabled, "finalLayout VK_IMAGE_LAYOUT_PRESENT_SRC_KHR requires
+    // VK_KHR_swapchain").
+    std::vector<VkExtensionProperties> deviceExtensionStorage;
+    std::vector<const char*>           enabledDeviceExtensions;
+    QuerySupportedDeviceExtensions(vkPhysicalDevice, deviceExtensionStorage, enabledDeviceExtensions);
 
+    VkDeviceCreateInfo deviceCreateInfo{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
+    deviceCreateInfo.pNext                  = &features2; // pEnabledFeatures must be null when using features2.
+    deviceCreateInfo.queueCreateInfoCount   = 1;
+    deviceCreateInfo.pQueueCreateInfos      = &queueCreateInfo;
+    deviceCreateInfo.enabledExtensionCount  = static_cast<std::uint32_t>(enabledDeviceExtensions.size());
+    deviceCreateInfo.ppEnabledExtensionNames = (enabledDeviceExtensions.empty() ? nullptr : enabledDeviceExtensions.data());
+
+    // Same auto-merge guarantee as xrCreateVulkanInstanceKHR above: the runtime is responsible
+    // for adding any device extensions/features it needs (e.g. external memory/semaphore bits
+    // for swapchain image interop) on top of what we pass in `vulkanCreateInfo`. We only have
+    // to specify what *LLGL* needs.
     XrVulkanDeviceCreateInfoKHR xrDeviceCreate{ XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR };
     xrDeviceCreate.systemId                 = systemId;
     xrDeviceCreate.pfnGetInstanceProcAddr   = &vkGetInstanceProcAddr;

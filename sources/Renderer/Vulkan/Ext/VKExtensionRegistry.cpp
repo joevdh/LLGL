@@ -9,13 +9,31 @@
 #include "../Vulkan.h"
 #include <LLGL/Container/Strings.h>
 #include <LLGL/Platform/Platform.h>
+#include <LLGL/RendererConfiguration.h>
+#include <cstring>
 
 
 namespace LLGL
 {
 
 
+#ifndef VK_LAYER_KHRONOS_VALIDATION_NAME
+#define VK_LAYER_KHRONOS_VALIDATION_NAME "VK_LAYER_KHRONOS_validation"
+#endif
+
+
 static bool g_VKRegisteredExtensions[static_cast<std::size_t>(VKExt::Count)] = {};
+
+// Required device extensions LLGL needs enabled on every VkDevice. Both the normal
+// VKRenderSystem path (via VKPhysicalDevice::PickPhysicalDevice) and the OpenXR binding
+// (which has to populate VkDeviceCreateInfo itself, since the runtime won't add these)
+// reference this single list.
+static const char* g_VKRequiredDeviceExtensions[] =
+{
+    VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+    VK_KHR_MAINTENANCE1_EXTENSION_NAME,
+    nullptr,
+};
 
 static const char* g_VKOptionalExtensions[] =
 {
@@ -82,6 +100,11 @@ const char** GetOptionalExtensions()
     return g_VKOptionalExtensions;
 }
 
+const char** GetRequiredDeviceExtensions()
+{
+    return g_VKRequiredDeviceExtensions;
+}
+
 static bool IsVulkanInstanceExtRequired(const StringView& name)
 {
     return
@@ -146,6 +169,121 @@ VKExtSupport GetVulkanInstanceExtensionSupport(const char* extensionName)
     if (IsVulkanInstanceExtDebugOnly(name))
         return VKExtSupport::DebugOnly;
     return VKExtSupport::Unsupported;
+}
+
+bool IsVulkanInstanceLayerRequired(
+    const char*                         layerName,
+    bool                                isDebugLayerEnabled,
+    const RendererConfigurationVulkan*  config)
+{
+    if (config != nullptr)
+    {
+        for (const char* layer : config->enabledLayers)
+        {
+            if (std::strcmp(layer, layerName) == 0)
+                return true;
+        }
+    }
+
+    if (isDebugLayerEnabled)
+    {
+        if (std::strcmp(layerName, VK_LAYER_KHRONOS_VALIDATION_NAME) == 0)
+            return true;
+    }
+    return false;
+}
+
+void QuerySupportedInstanceExtensions(
+    bool                                isDebugLayerEnabled,
+    std::vector<VkExtensionProperties>& outProps,
+    std::vector<const char*>&           outExtensionNames)
+{
+    std::uint32_t count = 0;
+    if (vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr) != VK_SUCCESS || count == 0)
+        return;
+    outProps.resize(count);
+    if (vkEnumerateInstanceExtensionProperties(nullptr, &count, outProps.data()) != VK_SUCCESS)
+        return;
+
+    outExtensionNames.reserve(outProps.size());
+    for (const VkExtensionProperties& prop : outProps)
+    {
+        const VKExtSupport tier = GetVulkanInstanceExtensionSupport(prop.extensionName);
+        const bool include =
+            (tier == VKExtSupport::Required) ||
+            (tier == VKExtSupport::Optional) ||
+            (isDebugLayerEnabled && tier == VKExtSupport::DebugOnly);
+        if (include)
+            outExtensionNames.push_back(prop.extensionName);
+    }
+}
+
+void QuerySupportedInstanceLayers(
+    bool                                isDebugLayerEnabled,
+    const RendererConfigurationVulkan*  config,
+    std::vector<VkLayerProperties>&     outProps,
+    std::vector<const char*>&           outLayerNames)
+{
+    std::uint32_t count = 0;
+    if (vkEnumerateInstanceLayerProperties(&count, nullptr) != VK_SUCCESS || count == 0)
+        return;
+    outProps.resize(count);
+    if (vkEnumerateInstanceLayerProperties(&count, outProps.data()) != VK_SUCCESS)
+        return;
+
+    outLayerNames.reserve(outProps.size());
+    for (const VkLayerProperties& prop : outProps)
+    {
+        if (IsVulkanInstanceLayerRequired(prop.layerName, isDebugLayerEnabled, config))
+            outLayerNames.push_back(prop.layerName);
+    }
+}
+
+void QuerySupportedDeviceExtensions(
+    VkPhysicalDevice                    physicalDevice,
+    std::vector<VkExtensionProperties>& outProps,
+    std::vector<const char*>&           outExtensionNames)
+{
+    std::uint32_t count = 0;
+    if (vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &count, nullptr) != VK_SUCCESS || count == 0)
+        return;
+    outProps.resize(count);
+    if (vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &count, outProps.data()) != VK_SUCCESS)
+        return;
+
+    auto IsAvailable = [&outProps](const char* name) -> bool
+    {
+        for (const VkExtensionProperties& p : outProps)
+        {
+            if (std::strcmp(p.extensionName, name) == 0)
+                return true;
+        }
+        return false;
+    };
+
+    auto AddIfAvailableAndNew = [&](const char* name)
+    {
+        if (!IsAvailable(name))
+            return;
+        for (const char* added : outExtensionNames)
+        {
+            if (std::strcmp(added, name) == 0)
+                return;
+        }
+        outExtensionNames.push_back(name);
+    };
+
+    if (const char** req = GetRequiredDeviceExtensions())
+    {
+        for (std::size_t i = 0; req[i] != nullptr; ++i)
+            AddIfAvailableAndNew(req[i]);
+    }
+
+    if (const char** opts = GetOptionalExtensions())
+    {
+        for (std::size_t i = 0; opts[i] != nullptr; ++i)
+            AddIfAvailableAndNew(opts[i]);
+    }
 }
 
 

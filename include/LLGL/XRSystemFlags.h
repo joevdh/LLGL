@@ -126,10 +126,7 @@ struct XRSystemDescriptor
     //! Combination of XRSystemFlags entries. By default 0.
     long                    flags               = 0;
 
-    //! Optional pointer to a rendering debugger. This is only supported if LLGL was compiled with the \c LLGL_ENABLE_DEBUG_LAYER flag.
-    RenderingDebugger*      debugger = nullptr;
-
-#ifdef LLGL_OS_ANDROID
+    #ifdef LLGL_OS_ANDROID
 
     /**
     \brief Android-specific application descriptor. \b Required on Android.
@@ -171,6 +168,9 @@ struct XRRenderSystemDescriptor
 
     //! Size (in bytes) of the structure \c rendererConfig points to. Ignored if \c rendererConfig is null.
     std::size_t             rendererConfigSize  = 0;
+
+    //! Optional pointer to a rendering debugger forwarded to the underlying renderer. This is only supported if LLGL was compiled with the \c LLGL_ENABLE_DEBUG_LAYER flag.
+    RenderingDebugger*      debugger            = nullptr;
 
     #ifdef LLGL_OS_ANDROID
 

@@ -81,20 +81,46 @@ if(LLGL_BUILD_XR_OPENXR)
     # NOTE: XR_USE_GRAPHICS_API_VULKAN and XR_USE_PLATFORM_ANDROID are set by sources/XR/OpenXR/OpenXRPlatform.h
     # based on the build environment, not from CMake. See that header for details.
 
-    # When the loader is a shared library (typical Windows case from the SDK), copy it
-    # next to the LLGL.dll runtime binary so example/test executables can find it at runtime.
-    # Use TARGET_FILE_DIR:LLGL so we land in the correct per-config subfolder under multi-config
-    # generators (Visual Studio appends Release/Debug/etc. to RUNTIME_OUTPUT_DIRECTORY).
+    # When the loader is a shared library (typical Windows case from the SDK), stage it
+    # so consumer executables can find it at runtime.
     if(WIN32 AND TARGET ${OPENXR_LOADER_TARGET})
         get_target_property(_oxr_loader_type ${OPENXR_LOADER_TARGET} TYPE)
         if(_oxr_loader_type STREQUAL "SHARED_LIBRARY")
+            # 1) Always copy next to LLGL's TARGET_FILE_DIR. When LLGL is built shared this is
+            #    where LLGL.dll lives, so anything that loads LLGL.dll can find the loader too.
+            #    When LLGL is static this is the .lib folder - harmless but not useful on its own.
             add_custom_command(
                 TARGET LLGL_XR_OpenXR POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "$<TARGET_FILE:${OPENXR_LOADER_TARGET}>"
                     "$<TARGET_FILE_DIR:LLGL>/$<TARGET_FILE_NAME:${OPENXR_LOADER_TARGET}>"
-                COMMENT "Copying OpenXR loader DLL next to LLGL.dll"
+                COMMENT "Copying OpenXR loader DLL next to LLGL"
             )
+
+            # 2) If the consuming project centralises runtime output via
+            #    CMAKE_RUNTIME_OUTPUT_DIRECTORY (typical for solutions that put all
+            #    executables/DLLs into a single bin/ folder), mirror the loader DLL there
+            #    too. This is essential when LLGL is built as a static library: there's no
+            #    LLGL.dll to copy alongside, and the consumer's exes need the loader DLL
+            #    in their own runtime directory to launch.
+            if(CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+                if(CMAKE_CONFIGURATION_TYPES)
+                    # Multi-config generators (Visual Studio, Xcode) append the per-config
+                    # subfolder (Debug/Release/...) to RUNTIME_OUTPUT_DIRECTORY automatically.
+                    set(_oxr_mirror_dst "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>")
+                else()
+                    # Single-config (Ninja, Make): one output directory.
+                    set(_oxr_mirror_dst "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+                endif()
+                add_custom_command(
+                    TARGET LLGL_XR_OpenXR POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E make_directory "${_oxr_mirror_dst}"
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "$<TARGET_FILE:${OPENXR_LOADER_TARGET}>"
+                        "${_oxr_mirror_dst}/$<TARGET_FILE_NAME:${OPENXR_LOADER_TARGET}>"
+                    COMMENT "Mirroring OpenXR loader DLL to consumer runtime output directory (${_oxr_mirror_dst})"
+                )
+            endif()
         endif()
     endif()
 

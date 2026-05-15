@@ -80,9 +80,9 @@ if(OPENXR_FOUND)
     # consolidate all DLLs into a single bin/ folder), the loader DLL lands elsewhere and
     # the SDK's xcopy fails with `File not found - openxr_loaderd.dll`, breaking the build.
     #
-    # Pin the loader's per-config output directory back to the SDK-expected location.
-    # Our own POST_BUILD copy step (sources/XR/OpenXR/CMakeLists.txt) still stages the DLL
-    # next to LLGL.dll, so consumers continue to get it where they need it at runtime.
+    # Pin the loader's per-config output directory back to the SDK-expected location so the
+    # SDK's own xcopy step finds the file. We then mirror the DLL into the consumer's
+    # global runtime output directory below so it still ends up next to consumer executables.
     if(TARGET openxr_loader AND CMAKE_GENERATOR MATCHES "^Visual Studio.*")
         get_target_property(_oxr_loader_type openxr_loader TYPE)
         if(_oxr_loader_type STREQUAL "SHARED_LIBRARY")
@@ -100,4 +100,9 @@ if(OPENXR_FOUND)
             endforeach()
         endif()
     endif()
+
+    # Note: we'd like to also stage the loader DLL into the consumer's global
+    # CMAKE_RUNTIME_OUTPUT_DIRECTORY (when set) so it lands next to consumer executables.
+    # That's done in sources/XR/OpenXR/CMakeLists.txt, where the LLGL_XR_OpenXR target is
+    # defined - CMake disallows attaching add_custom_command to targets from other directories.
 endif()

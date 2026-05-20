@@ -703,6 +703,16 @@ VkSurfaceFormatKHR VKSwapChain::PickSwapSurfaceFormat(const std::vector<VkSurfac
 
 VkExtent2D VKSwapChain::PickSwapExtent(const VkSurfaceCapabilitiesKHR& surfaceCaps, const Extent2D& resolution) const
 {
+    /*
+    Per Vulkan spec, when currentExtent is not the magic 0xFFFFFFFF value the swap-chain
+    must use it verbatim — otherwise strict drivers (e.g. Adreno on Windows-on-ARM) return
+    VK_ERROR_OUT_OF_DATE_KHR on every present, since the requested extent doesn't match the
+    surface's physical pixel size (common cause: DPI scaling between LLGL's logical resolution
+    and the actual surface size).
+    */
+    if (surfaceCaps.currentExtent.width != 0xFFFFFFFF)
+        return surfaceCaps.currentExtent;
+
     return VkExtent2D
     {
         std::max(surfaceCaps.minImageExtent.width,  std::min(surfaceCaps.maxImageExtent.width,  resolution.width )),
